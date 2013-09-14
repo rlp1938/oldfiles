@@ -1,0 +1,6 @@
+1. Stage 1 complete - it lists the old files
+2. Stage 2 - act on list of files to update mtime to now. Done.
+3. Stage 3 - act on list of files to delete them.
+old 4704 lines, protect 439 lines
+latest old is 4265 lines
+4265 + 439 = 4704
