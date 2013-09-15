@@ -34,17 +34,24 @@
 #include <utime.h>
 
 char *helpmsg = "\n\tUsage: listoldfiles [option] [dir]\n"
-  "\nBy default the starting dir is the user's home directory\n"
+  "\n\tBy default the starting dir is the user's home directory\n"
   "\n\tOptions:\n"
   "\t-h outputs this help message.\n"
   "\t-aN[MmDd] By default this is 3 years older than now.\n"
   "\t If N is followed by a suffix [MmDd] the age will be\n"
-  "\t interpreted as months or days respectively\n"
+  "\t interpreted as months or days respectively, otherwise years.\n"
   "\t-f filename. Output will be sent to this filename, default stdout\n"
+  "\t-p filename. Protect files in filename by updating times to now.\n"
+  "\t The list of files must be in the same format as the list of\n"
+  "\t old files produced by this program.\n"
+  "\t-d filename. Delete files listed in filename.\n"
+  "\t The list of files must be in the same format as the list of\n"
+  "\t old files produced by this program.\n"
 ;
 void dohelp(int forced);
 void recursedir(char *path);
 void protect(const char *fn);
+void delete(const char *fn);
 
 //Global vars
 FILE *fpo;
@@ -65,7 +72,7 @@ int main(int argc, char **argv)
     strcpy(topdir, getenv("HOME"));
     fpo=stdout;
 
-    while((opt = getopt(argc, argv, ":ha:f:p:")) != -1) {
+    while((opt = getopt(argc, argv, ":ha:f:p:d:")) != -1) {
         switch(opt){
         case 'h':
             dohelp(0);
@@ -86,6 +93,11 @@ int main(int argc, char **argv)
         case 'p':   // update mtime to now for named files in list.
                     // ie protect from being listed by this program.
                 protect(optarg);
+                exit(EXIT_SUCCESS);
+        break;
+        case 'd':   // unlink named files in list.
+                    // If containing dir is empty delete that also.
+                delete(optarg);
                 exit(EXIT_SUCCESS);
         break;
         case ':':
@@ -121,7 +133,7 @@ struct tm {
     // Calculate the file selection date
     fileage = time(NULL);
     fatm = localtime(&fileage);
-    printf("Time is: %s\n", asctime(fatm));
+    // printf("Time is: %s\n", asctime(fatm));
     switch (aunit) {
         int tmp;
         time_t tim;
@@ -146,7 +158,7 @@ struct tm {
             fatm = localtime(&tim);
         break;
     }
-    printf("New time is: %s\n", asctime(fatm));
+    // printf("New time is: %s\n", asctime(fatm));
     fileage = mktime(fatm); // now set to the required time in the past
 
     // Check that the top dir is legitimate then recurse dirs
@@ -261,6 +273,61 @@ void protect(const char *fn)
     } // while()
 } //protect()
 
+void delete(const char *fn)
+{
+    // fn is a file containing a list of filenames to delete.
+    // the lines in fn MUST be in the format as written out by this
+    // program.
+    FILE *fpi;
+    char buf[PATH_MAX];
+    char dir[PATH_MAX];
+    char *dow[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    char *cp;
+    int badformat, i;
+
+    if (!(fpi = fopen(fn, "r"))) {
+        perror(fn);
+        exit (EXIT_FAILURE);
+    }
+
+    // set up directory under consideration
+    dir[0] = 0;
+
+    while (fgets(buf, PATH_MAX, fpi)) {
+        // find the end of the filename
+        badformat = 1;
+        for (i=0; i < 7; i++) {
+            cp = strstr(buf, dow[i]);
+            if (cp) {
+                badformat = 0;
+                break;
+            }
+        } // for(i=...
+        if (badformat) {
+            fprintf(stderr, "Mal formed data line: %s\n", buf);
+            exit(EXIT_FAILURE);
+        }
+        cp--;   // the space before DOW
+        *cp = 0;
+        // directory processing
+        cp = strrchr(buf, '/');
+        *cp = 0;
+        if (strcmp(dir, buf) != 0) { // have a new dir
+            if (strlen(dir)) rmdir(dir);
+            // Will fail if not empty so fail silently
+            strcpy(dir, buf);   // init new dir
+        }
+        *cp = '/';  // restore full path name to file
+
+        // now have absolute pathname to file, delete it.
+        if (unlink(buf) == -1) {
+            // just report the erroneous name, don't abort.
+            perror(buf);
+        }
+
+    } // while()
+
+} // delete
 
 
 
