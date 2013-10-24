@@ -119,51 +119,49 @@ time_t parsetimestring(const char *timestr)
 {
    /*
     * check the string in dts for valid values
-    * and return the struct if all ok;
+    * and return the time if all ok;
    */
    char dts[16];
    struct tm dt;
-
+   int yy, mm, dd, hh, min;
+   min = hh = dd = mm = yy = 0;
    // seconds will never be set here, also minutes & hours may not be.
-   dt.tm_sec = 0;
-   dt.tm_min = 0;
-   dt.tm_hour = 0;
 
    strcpy(dts, timestr);
    switch(strlen(dts)) {
         case 12:
-            dt.tm_min = atoi(&dts[10]);
-            if ((dt.tm_min < 0 ) || (dt.tm_min > 59)) {
+            min = atoi(&dts[10]);
+            if ((min < 0 ) || (min > 59)) {
                 fprintf(stderr, "Illegal value for minutes: %d\n",
-                        dt.tm_min);
+                        min);
                 dohelp(1);
             }
             dts[10] = '\0';
         case 10:
-            dt.tm_hour = atoi(&dts[8]);
-            if ((dt.tm_hour < 0 ) || (dt.tm_hour > 23)) {
+            hh = atoi(&dts[8]);
+            if ((hh < 0 ) || (hh > 23)) {
                 fprintf(stderr, "Illegal value for hours: %d\n",
-                        dt.tm_hour);
+                        hh);
                 dohelp(1);
             }
             dts[8] = '\0';
         case 8:
-            dt.tm_mday = atoi(&dts[6]);
-            if ((dt.tm_mday < 1 ) || (dt.tm_mday > 31)) { // rough enough for now
+            dd = atoi(&dts[6]);
+            if ((dd < 1 ) || (dd > 31)) { // rough enough for now
                 fprintf(stderr, "Illegal value for days: %d\n",
-                        dt.tm_mday);
+                        dd);
                 dohelp(1);
             }
             dts[6] = '\0';
-            dt.tm_mon = atoi(&dts[4]) - 1;
-            if ((dt.tm_mon < 1 ) || (dt.tm_mon > 12)) {
+            mm = atoi(&dts[4]);
+            if ((mm < 1 ) || (mm > 12)) {
                 fprintf(stderr, "Illegal value for months: %d\n",
-                        dt.tm_mon);
+                        mm);
                 dohelp(1);
             }
             dts[4] = '\0';
 
-            dt.tm_year = atoi(dts) - 1900;
+            yy = atoi(dts);
         break;
         default:
         fprintf(stderr, "%s is not formatted correctly\n", dts);
@@ -172,16 +170,22 @@ time_t parsetimestring(const char *timestr)
         // now test if our days are valid for the month
     } // switch()
 
-    dt.tm_wday = 0;
-    dt.tm_yday = 0;
-    dt.tm_isdst = 0;    // deal with dailight savings time later
-
-    if (!(validday(dt.tm_year, dt.tm_mon, dt.tm_mday))) {
+    if (!(validday(yy, mm, dd))) {
         fprintf(stderr, "For the year %d, month %d, %d"
                         " days is invalid\n",
-                        dt.tm_year, dt.tm_mon, dt.tm_mday);
+                        yy, mm, dd);
         exit(EXIT_FAILURE);
     }
+    // now assign to the tm struct
+    dt.tm_sec = 0;          // seconds - not used here
+    dt.tm_min = min;        // minutes
+    dt.tm_hour = hh;        // hours
+    dt.tm_mday = dd;        // day in month
+    dt.tm_mon = mm - 1;     // month # 0..11
+    dt.tm_year = yy - 1900; // year offset from 1900
+    dt.tm_wday = 0;         // week day number - not used here
+    dt.tm_yday = 0;         // day # in year - not used here
+    dt.tm_isdst = 0;        // daylight savings time - ignored here
     return mktime(&dt);
 } // parsetimestring()
 
@@ -202,6 +206,7 @@ int leapyear(int yy)
     if (yy % 100 == 0) return 0;
     return 1; // yy % 4 == 0
 } // leapyear()
+
 
 
 
