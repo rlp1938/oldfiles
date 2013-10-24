@@ -1,5 +1,5 @@
 
-/*      listoldfiles.c
+/*      oldfiles.c
  *
  *  Copyright 2011 Bob Parker <rlp1938@gmail.com>
  *
@@ -26,54 +26,107 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <string.h>
 #include <errno.h>
 #include <getopt.h>
 #include <time.h>
 #include <utime.h>
 
-char *helpmsg = "\n\tUsage: listoldfiles [option] [dir]\n"
-  "\n\tBy default the starting dir is the user's home directory\n"
-  "\n\tOptions:\n"
+char *helpmsg =
+  "NAME\n\toldfiles - lists old files and optionally deletes them"
+  " or renews file\n\ttimes using the generated list."
+  "\tAlso provides an option to delete empty\n\tdirectories.\n"
+  "SYNOPSIS"
+  "\n\toldfiles [option] [topdir]\n"
+  "\n\tLists files under topdir which are older than the default age\n"
+  "\tof 3 years to stdout, unless other options are used.\n"
+  "\tBy default topdir is the user's home directory.\n"
+  "\nDESCRIPTION\n"
+  "\tOldfiles when run with no options or target directory specified,\n\t"
+  "simply lists all files in the users home directory which are\n\t"
+  "older than the default age of 3 years.\n\t"
+  "You may optionally use it to delete such listed files and after\n\t"
+  "that delete any consequential empty directories.\n"
+  "\nOPTIONS\n"
   "\t-h outputs this help message.\n"
-  "\t-aN[MmDd] By default this is 3 years older than now.\n"
+  "\t-aN[MmDd] Choose file age, by default this is 3 years older"
+  " than now.\n"
   "\t If N is followed by a suffix [MmDd] the age will be\n"
   "\t interpreted as months or days respectively, otherwise years.\n"
+  "\t-o yyyymmdd[hh[mm]] Delete files older than this date.\n"
   "\t-f filename. Output will be sent to this filename, default stdout\n"
-  "\t-p filename. Protect files in filename by updating times to now.\n"
-  "\t The list of files must be in the same format as the list of\n"
-  "\t old files produced by this program.\n"
+  "\t   This option is ignored unless in listing mode.\n"
+  "\t-u filename. Update filetimes in files listed in filename to now.\n"
+  "\t   The list of files must be in the same format as the list of\n"
+  "\t   old files produced by this program.\n"
   "\t-d filename. Delete files listed in filename.\n"
-  "\t The list of files must be in the same format as the list of\n"
-  "\t old files produced by this program.\n"
+  "\t   The list of files must be in the same format as the list of\n"
+  "\t   old files produced by this program.\n"
+  "\t-D Delete empty dirs under topdir.\n"
+  "\tThe next 2 options are not yet implemented.\n"
+  "\t-n Do a dry run only. List what would happen to stdout.\n"
+  "\t-v Verbose, list actions taken on stdout.\n"
 ;
+//Global vars
+FILE *fpo;
+time_t fileage;
+int verbose;
+char *opfn;
+
+
+struct listitem {
+    char *dirname;
+    struct listitem *next;
+};
+
+struct listitem *head;
+
+struct listitem *newlistitem(void);
 void dohelp(int forced);
 void recursedir(char *path);
 void protect(const char *fn);
 void delete(const char *fn);
+void listdirs(char *dirname);
+int numdiritems(char *testdir);
+struct listitem *insertbefore(char *name, struct listitem *head);
+void delete_listed(struct listitem *head);
+void delete_empties(char *topdir);
+void print_listed(struct listitem *head);
+void recurseprint(char *topdir);
+time_t cutofftimebyage(int age, char aunit);
+time_t parsetimestring(const char *dts);
+int validday(int yy, int mon, int dd);
+int leapyear(int yy);
+FILE *dofopen(const char *fn, const char *themode);
 
-//Global vars
-FILE *fpo;
-time_t fileage;
 
 
 int main(int argc, char **argv)
 {
     int opt;
-    int age;
+    int age, task, action;
     char topdir[PATH_MAX];
     char aunit = 'Y';
-    struct tm *fatm;
     struct stat sb;
+    char *datestr, *actionfn;
 
     // set up defaults
     age = 3;
     strcpy(topdir, getenv("HOME"));
     fpo=stdout;
+    verbose = 0;
+    head = newlistitem();
+    opfn = (char *)NULL;
+    action = 0;
+    task = 1;
 
-    while((opt = getopt(argc, argv, ":ha:f:p:d:")) != -1) {
+    while((opt = getopt(argc, argv, ":hDa:f:u:d:o:")) != -1) {
         switch(opt){
+        /* I have no idea what the value of topdir will be during
+         * options processing so all I can do is set a task variable
+         * to select action after topdir is known or whether it's
+         * actually needed.
+        */
         case 'h':
             dohelp(0);
         break;
@@ -85,20 +138,32 @@ int main(int argc, char **argv)
             if (strchr(optarg, 'd')) aunit = 'D';
         break;
         case 'f':   // named output file, not stdout.
-            fpo = fopen(optarg, "w");
-            if (!(fpo)) {
-                perror(optarg);
-                exit(EXIT_FAILURE);
-            }
-        case 'p':   // update mtime to now for named files in list.
+            opfn = strdup(optarg);
+        break;
+        case 'u':   // update mtime to now for named files in list.
                     // ie protect from being listed by this program.
-                protect(optarg);
-                exit(EXIT_SUCCESS);
+                task = 3;
+                actionfn = strdup(optarg);
+                action++;
         break;
         case 'd':   // unlink named files in list.
-                    // If containing dir is empty delete that also.
-                delete(optarg);
-                exit(EXIT_SUCCESS);
+                task = 4;
+                actionfn = strdup(optarg);
+                action++;
+        break;
+        case 'D':   // delete empty dirs under topdir
+                task = 5;
+                action++;
+        break;
+        case 'o':   // list files older than input file time
+            task = 2;
+            datestr = strdup(optarg);
+        break;
+        case 'e':   // list empty dir under topdir
+            task = 6;   // list before named file time
+        break;
+        case 'v':   // verbose output thank you
+                verbose = 1;
         break;
         case ':':
             fprintf(stderr, "Option %c requires an argument\n",optopt);
@@ -110,58 +175,21 @@ int main(int argc, char **argv)
         break;
         } //switch()
     }//while()
+
+    // Check that mutually exclusive options have not been chosen.
+    if (action > 1) {
+        fprintf(stderr,
+        "You may only select one option of -u, -D -d in one run!\n");
+        dohelp(1);
+    }
     // now process the non-option arguments
 
-    // 1.Check that argv[1] exists.
+    // 1.See if argv[1] exists.
     if ((argv[optind])) {
        strcpy(topdir, argv[optind]);  // default is /home/$USER
     }
 
-/*
-struct tm {
-               int tm_sec;         // seconds
-               int tm_min;         // minutes
-               int tm_hour;        // hours
-               int tm_mday;        // day of the month
-               int tm_mon;         // month
-               int tm_year;        // year
-               int tm_wday;        // day of the week
-               int tm_yday;        // day in the year
-               int tm_isdst;       // daylight saving time
-           };
-*/
-    // Calculate the file selection date
-    fileage = time(NULL);
-    fatm = localtime(&fileage);
-    // printf("Time is: %s\n", asctime(fatm));
-    switch (aunit) {
-        int tmp;
-        time_t tim;
-        case 'Y':
-            fatm->tm_year -= age;
-        break;
-        case 'M':
-            tmp = age / 12;
-            fatm->tm_year -= tmp;
-            tmp = age % 12;
-            if (tmp < fatm->tm_mon) {
-                fatm->tm_mon -= tmp;
-            } else {
-                tmp = 12 - tmp;
-                fatm->tm_year--;
-                fatm->tm_mon += tmp;
-            }
-        break;
-        case 'D':
-            fatm->tm_mday -= age;
-            tim = mktime(fatm);
-            fatm = localtime(&tim);
-        break;
-    }
-    // printf("New time is: %s\n", asctime(fatm));
-    fileage = mktime(fatm); // now set to the required time in the past
-
-    // Check that the top dir is legitimate then recurse dirs
+    // Check that the top dir is legitimate.
     if (stat(topdir, &sb) == -1) {
         perror(topdir);
         exit(EXIT_FAILURE);
@@ -171,9 +199,34 @@ struct tm {
         fprintf(stderr, "%s is not a directory!\n", topdir);
         exit(EXIT_FAILURE);
     }
-    // now recurse
-    recursedir(topdir);
 
+    // Chosse the action to be taken
+    switch (task) {
+        //struct tm *tim;
+        case 1: // list old files by elapsed time.
+            fileage = cutofftimebyage(age, aunit);
+            if (opfn) fpo = dofopen(opfn, "w");
+            recursedir(topdir);
+        break;
+        case 2: // list old files by user input cut-off date
+            fileage = parsetimestring(datestr);
+            if (opfn) fpo = dofopen(opfn, "w");
+            recursedir(topdir);
+        break;
+        case 3: // update files listed in user named file to now()
+            protect(actionfn);
+        break;
+        case 4: // delete files listed in user named file.
+            delete(actionfn);
+        break;
+        case 5: // delete empty dirs under topdir.
+            delete_empties(topdir);
+        break;
+        case 6: // list empty dirs under topdir in processing order.
+        break;
+        default:
+        break;
+    } // switch(task)
     return 0;
 }//main()
 
@@ -182,6 +235,17 @@ void dohelp(int forced)
   fputs(helpmsg, stderr);
   exit(forced);
 }
+
+struct listitem *newlistitem(void)
+{
+    struct listitem *lip;
+    lip = malloc(sizeof(struct listitem));
+    if (!(lip)) {
+        perror("newlistitem()");
+        exit (EXIT_FAILURE);
+    }
+    return lip;
+} // newlistitem()
 
 void recursedir(char *path)
 {
@@ -239,7 +303,8 @@ void protect(const char *fn)
     // program.
     FILE *fpi;
     char buf[PATH_MAX];
-    char *dow[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    char *dow[] = {" Sun", " Mon", " Tue", " Wed", " Thu", " Fri",
+                    " Sat"};
     char *cp;
     int badformat, i;
 
@@ -262,14 +327,12 @@ void protect(const char *fn)
             fprintf(stderr, "Mal formed data line: %s\n", buf);
             exit(EXIT_FAILURE);
         }
-        cp--;   // the space before DOW
         *cp = 0;
         // now have absolute pathname to file, update times
         if (utime(buf, NULL) == -1) {
             // just report the erroneous name, don't abort.
             perror(buf);
         }
-
     } // while()
 } //protect()
 
@@ -281,7 +344,8 @@ void delete(const char *fn)
     FILE *fpi;
     char buf[PATH_MAX];
     char dir[PATH_MAX];
-    char *dow[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    char *dow[] = {" Sun ", " Mon ", " Tue ", " Wed ", " Thu ",
+                    " Fri ", " Sat "};
     char *cp;
     int badformat, i;
 
@@ -307,7 +371,6 @@ void delete(const char *fn)
             fprintf(stderr, "Mal formed data line: %s\n", buf);
             exit(EXIT_FAILURE);
         }
-        cp--;   // the space before DOW
         *cp = 0;
         // directory processing
         cp = strrchr(buf, '/');
@@ -328,6 +391,240 @@ void delete(const char *fn)
     } // while()
 
 } // delete
+
+void listdirs(char *topdir)
+{
+    // traverse dir starting from topdir and list them
+    // in reverse order of depth.
+    char newdir[PATH_MAX];
+    struct dirent *de;
+    DIR *dp;
+    if (!(dp = opendir(topdir))) {
+        perror(topdir);
+        exit(EXIT_FAILURE);
+    }
+    head = insertbefore(topdir, head);
+    //printf("listdirs: %s\n", topdir);
+    while ((de = readdir(dp))) {
+        if ((strcmp(".",de->d_name) == 0) ||
+        (strcmp("..",de->d_name) == 0)) continue;
+        if (de->d_type == DT_DIR) {
+            strcpy(newdir, topdir);
+            if (newdir[strlen(newdir) - 1] != '/') strcat(newdir, "/");
+            strcat(newdir, de->d_name);
+            listdirs(newdir);
+        }
+    } // while()
+    closedir(dp);
+} // listdirs()
+
+int numdiritems(char *testdir)
+{   // counts number of dir items other than directories
+    DIR *dp;
+    int items = 0;
+    struct dirent *de;
+    dp = opendir(testdir);
+    while ((de = readdir(dp))) {
+        if ((strcmp(".",de->d_name) == 0) ||
+        (strcmp("..",de->d_name) == 0)) continue;
+        items++;
+    } // while()
+    closedir(dp);
+    return items;
+} // numdiritems()
+
+struct listitem *insertbefore(char *name, struct listitem *head)
+{
+    struct listitem *li = newlistitem();
+    li->dirname = strdup(name);
+    li->next = head;
+    return li;
+} // insertbefore()
+
+void delete_empties(char *topdir)
+{
+    //recurseprint(topdir);
+    listdirs(topdir);
+    print_listed(head);
+    delete_listed(head);
+} // delete_empties()
+
+void delete_listed(struct listitem *head)
+{   // requires that the empty dirs are in order from lowest to highest
+    while (head->dirname) {
+        sync(); // required most likely
+        if (rmdir(head->dirname) == -1) {
+            perror(head->dirname);   // don't abort just inform
+        } // if()
+        head = head->next;
+    } // while()
+} // delete_listed()
+
+void print_listed(struct listitem *head)
+{   // requires that the empty dirs are in order from lowest to highest
+    while (head->dirname) {
+        printf("%s\n", head->dirname);
+        head = head->next;
+    } // while()
+} // delete_listed()
+
+void recurseprint(char *topdir)
+{
+    // just for testing recursive traversal
+    DIR *dp;
+    struct dirent *de;
+    char newdir[PATH_MAX];
+    if (!(dp = opendir(topdir))) {
+        perror(topdir);
+        exit(EXIT_FAILURE);
+    }
+    printf("Dir is:%s\n", topdir);
+    while((de = readdir(dp))) {
+        if (strcmp(".", de->d_name) == 0 ) continue;
+        if (strcmp("..", de->d_name) == 0 ) continue;
+        if (de->d_type == DT_DIR) {
+            strcpy(newdir, topdir);
+            if (newdir[strlen(newdir)-1] != '/') strcat(newdir, "/");
+            strcat(newdir, de->d_name);
+            recurseprint(newdir);
+        }
+    } // while()
+    closedir(dp);
+}
+
+time_t cutofftimebyage(int age, char aunit)
+{
+    // Calculate the file selection date
+    time_t fileage;
+    struct tm *fatm;
+
+    fileage = time(NULL);
+    fatm = localtime(&fileage);
+    // printf("Time is: %s\n", asctime(fatm));
+    switch (aunit) {
+        case 'Y':
+            fatm->tm_year -= age;
+        break;
+        case 'M':
+        /*
+            tmp = age / 12;
+            fatm->tm_year -= tmp;
+            tmp = age % 12;
+            if (tmp < fatm->tm_mon) {
+                fatm->tm_mon -= tmp;
+            } else {
+                tmp = 12 - tmp;
+                fatm->tm_year--;
+                fatm->tm_mon += tmp;
+            }
+        */
+            fatm->tm_mon -= age;
+        break;
+        case 'D':
+            fatm->tm_mday -= age;
+        break;
+    }
+    return mktime(fatm);
+} // cutofftimebyage()
+
+time_t parsetimestring(const char *timestr)
+{
+   /*
+    * check the string in dts for valid values
+    * and return the time if all ok;
+   */
+   char dts[16];
+   struct tm dt;
+
+   // seconds will never be set here, also minutes & hours may not be.
+   dt.tm_sec = 0;
+   dt.tm_min = 0;
+   dt.tm_hour = 0;
+   dt.tm_wday = 0;
+   dt.tm_yday = 0;
+
+   strcpy(dts, timestr);
+   switch(strlen(dts)) {
+        case 12:
+            dt.tm_min = atoi(&dts[10]);
+            if ((dt.tm_min < 0 ) || (dt.tm_min > 59)) {
+                fprintf(stderr, "Illegal value for minutes: %d\n",
+                        dt.tm_min);
+                dohelp(1);
+            }
+            dts[10] = '\0';
+        case 10:
+            dt.tm_hour = atoi(&dts[8]);
+            if ((dt.tm_hour < 0 ) || (dt.tm_hour > 23)) {
+                fprintf(stderr, "Illegal value for hours: %d\n",
+                        dt.tm_hour);
+                dohelp(1);
+            }
+            dts[8] = '\0';
+        case 8:
+            dt.tm_mday = atoi(&dts[6]);
+            if ((dt.tm_mday < 1 ) || (dt.tm_mday > 31)) { // rough enough for now
+                fprintf(stderr, "Illegal value for days: %d\n",
+                        dt.tm_mday);
+                dohelp(1);
+            }
+            dts[6] = '\0';
+            dt.tm_mon = atoi(&dts[4]) - 1;
+            if ((dt.tm_mon < 0 ) || (dt.tm_mon > 11)) {
+                fprintf(stderr, "Illegal value for months: %d\n",
+                        dt.tm_mon+1);
+                dohelp(1);
+            }
+            dts[4] = '\0';
+
+            dt.tm_year = atoi(dts) - 1900;
+        break;
+        default:
+        fprintf(stderr, "%s is not formatted correctly\n", dts);
+        dohelp(1);
+        break;
+        // now test if our days are valid for the month
+    } // switch()
+
+
+    if (!(validday(dt.tm_year+1900, dt.tm_mon+1, dt.tm_mday))) {
+        fprintf(stderr, "For the year %d, month %d, %d"
+                        " days is invalid\n",
+                        dt.tm_year+1900, dt.tm_mon+1, dt.tm_mday);
+        exit(EXIT_FAILURE);
+    }
+    return mktime(&dt);
+} // parsetimestring()
+
+int validday(int yy, int mon, int dd)
+{
+    int daysinmonth[13] = {0,31,28,31,30,31,30,31,31,30,31,30,21};
+    if (mon == 2) {
+        daysinmonth[2] += leapyear(yy);
+    }
+    if (dd <= daysinmonth[mon]) return 1;
+    return 0;
+} // validday()
+
+int leapyear(int yy)
+{
+    if (yy % 4 != 0) return 0;
+    if (yy % 400 == 0) return 1;
+    if (yy % 100 == 0) return 0;
+    return 1; // yy % 4 == 0
+} // leapyear()
+
+FILE *dofopen(const char *fn, const char *themode)
+{
+    FILE *f = fopen(fn, themode);
+    if(f) return f;
+    perror(fn);
+    exit(EXIT_FAILURE);
+}
+
+
+
+
 
 
 
