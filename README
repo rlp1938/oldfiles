@@ -1,0 +1,22 @@
+There are two programs, oldfiles.c and utimefu.c
+Oldfiles is for listing old files and optionally deleting
+those listed files, along with removing some files from the
+deletion list by renewing utimes.
+Utimefu.c is useful for setting arbitrary times on a file or groups
+of files.
+
+Compile these programs thusly:
+gcc -Wall oldfiles.c -o oldfiles
+gcc -Wall utimefu.c -o utimefu
+
+Install if required by:
+sudo cp olfiles /usr/local/bin
+sudo cp utimefu /usr/local/bin
+
+Any warnings during compilation should be considered bugs.
+
+BUG REPORTS rlp1938@gmail.com
+
+
+
+

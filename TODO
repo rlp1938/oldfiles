@@ -1,10 +1,9 @@
 1. Stage 1 complete - it lists the old files
 2. Stage 2 - act on list of files to update mtime to now. Done.
-3. Stage 3 - act on list of files to delete them. Completed but buggy.
-   It leaves some items undeleted. Also need to take dir deletion
-   out of Stage 3 and make Stage 4.
+3. Stage 3 - act on list of files to delete them.
 4. Stage 4 - remove empty directories under the head dir.
+5. Add option to input time spec for file selection.
+All done.
 
-old 4704 lines, protect 439 lines
-latest old is 4265 lines
-4265 + 439 = 4704
+Yet to do: create a makefile
+
