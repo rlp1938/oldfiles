@@ -165,6 +165,7 @@ time_t parsetimestring(const char *timestr)
         break;
         default:
         fprintf(stderr, "%s is not formatted correctly\n", dts);
+
         dohelp(1);
         break;
         // now test if our days are valid for the month

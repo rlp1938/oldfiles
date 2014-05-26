@@ -7,3 +7,5 @@ All done.
 
 Yet to do: create a makefile
 
+Review behaviour of this program when dealing wiyh symlinks.
+Maybe provide option to list broken symlinks.

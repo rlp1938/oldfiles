@@ -10,7 +10,7 @@ gcc -Wall oldfiles.c -o oldfiles
 gcc -Wall utimefu.c -o utimefu
 
 Install if required by:
-sudo cp olfiles /usr/local/bin
+sudo cp oldfiles /usr/local/bin
 sudo cp utimefu /usr/local/bin
 
 Any warnings during compilation should be considered bugs.

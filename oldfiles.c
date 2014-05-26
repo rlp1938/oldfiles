@@ -63,15 +63,15 @@ char *helpmsg =
   "\t   The list of files must be in the same format as the list of\n"
   "\t   old files produced by this program.\n"
   "\t-D Delete empty dirs under topdir.\n"
-  "\tThe next 2 options are not yet implemented.\n"
-  "\t-n Do a dry run only. List what would happen to stdout.\n"
-  "\t-v Verbose, list actions taken on stdout.\n"
+  "\t-s list dangling symlinks under topdir.\n"
+  "\t-b filename. Delete the dangling symlinks listed in filename.\n"
 ;
 //Global vars
 FILE *fpo;
 time_t fileage;
 int verbose;
 char *opfn;
+const int eloop = 5;
 
 
 struct listitem {
@@ -98,7 +98,8 @@ time_t parsetimestring(const char *dts);
 int validday(int yy, int mon, int dd);
 int leapyear(int yy);
 FILE *dofopen(const char *fn, const char *themode);
-
+void listdanglers(char *topdir);
+void delete_danglers(char *actionfn);
 
 
 int main(int argc, char **argv)
@@ -120,7 +121,7 @@ int main(int argc, char **argv)
     action = 0;
     task = 1;
 
-    while((opt = getopt(argc, argv, ":hDa:f:u:d:o:")) != -1) {
+    while((opt = getopt(argc, argv, ":hDa:f:u:d:o:sb:")) != -1) {
         switch(opt){
         /* I have no idea what the value of topdir will be during
          * options processing so all I can do is set a task variable
@@ -162,8 +163,13 @@ int main(int argc, char **argv)
         case 'e':   // list empty dir under topdir
             task = 6;   // list before named file time
         break;
-        case 'v':   // verbose output thank you
-                verbose = 1;
+        case 's':   // list dangling symlinks under topdir.
+            task = 7;
+        break;
+        case 'b':   // delete dangling symlinks listed in named file.
+            task = 8;
+            actionfn = strdup(optarg);
+            action++;
         break;
         case ':':
             fprintf(stderr, "Option %c requires an argument\n",optopt);
@@ -179,7 +185,7 @@ int main(int argc, char **argv)
     // Check that mutually exclusive options have not been chosen.
     if (action > 1) {
         fprintf(stderr,
-        "You may only select one option of -u, -D -d in one run!\n");
+        "You may only select one option of -u, -D -d -b in one run!\n");
         dohelp(1);
     }
     // now process the non-option arguments
@@ -224,6 +230,12 @@ int main(int argc, char **argv)
         break;
         case 6: // list empty dirs under topdir in processing order.
         break;
+        case 7: // list dangling symlinks under topdir.
+            listdanglers(topdir);
+        break;
+        case 8: // delete dangling symlinks listed in actionfn.
+            delete_danglers(actionfn);
+        break;
         default:
         break;
     } // switch(task)
@@ -247,54 +259,6 @@ struct listitem *newlistitem(void)
     return lip;
 } // newlistitem()
 
-void recursedir(char *path)
-{
-    char newpath[PATH_MAX];
-    struct dirent *de;
-    DIR *dp;
-
-    dp = opendir(path);
-    if (!(dp)) {
-        perror(path);
-        exit(EXIT_FAILURE);
-    }
-    while ((de = readdir(dp))) {
-        struct stat sb;
-        char filepath[PATH_MAX];
-        if (strcmp(de->d_name, ".") == 0) continue;
-        if (strcmp(de->d_name, "..") == 0) continue;
-        if (de->d_type == DT_DIR) {
-            // process this dir
-            strcpy(newpath, path);
-            if (newpath[strlen(newpath)-1] != '/') strcat(newpath, "/");
-            strcat(newpath, de->d_name);
-            recursedir(newpath);
-        } else if (de->d_type == DT_REG) {
-            // process regular file
-            strcpy(filepath, path);
-            if (filepath[strlen(filepath)-1] != '/') strcat(filepath, "/");
-            strcat(filepath, de->d_name);
-            if (stat(filepath, &sb) == -1) {
-                perror(filepath);   // just note the error, don't abort.
-            } else {
-                // do the file file m time check
-                time_t thisfiletime;
-                thisfiletime = sb.st_mtime;
-                if (thisfiletime < fileage) {
-                    // report the thing
-                    fprintf(fpo, "%s %s" ,filepath,
-                                asctime(localtime(&thisfiletime)) );
-                }
-
-            }
-
-        } else {
-            continue;   // whatever it is, ignore it
-        }
-
-    }
-    closedir(dp);
-} // recursedir()
 
 void protect(const char *fn)
 {
@@ -622,7 +586,235 @@ FILE *dofopen(const char *fn, const char *themode)
     exit(EXIT_FAILURE);
 }
 
+void listdanglers(char *topdir)
+{
+    /*
+     * Search from topdir recursively to find dangling symlinks
+    * */
+    char newpath[PATH_MAX];
+    struct dirent *de;
+    DIR *dp;
 
+    dp = opendir(topdir);
+    if (!(dp)) {
+        perror(topdir);
+        exit(EXIT_FAILURE);
+    }
+    while ((de = readdir(dp))) {
+        struct stat sb;
+        char filepath[PATH_MAX];
+        time_t thisfiletime;
+        if (strcmp(de->d_name, ".") == 0) continue;
+        if (strcmp(de->d_name, "..") == 0) continue;
+        switch (de->d_type) {
+            case DT_DIR:
+            // process this dir
+            strcpy(newpath, topdir);
+            if (newpath[strlen(newpath)-1] != '/') strcat(newpath, "/");
+            strcat(newpath, de->d_name);
+            listdanglers(newpath);
+            break;
+            case DT_LNK:
+            // process symlink only
+            strcpy(filepath, topdir);
+            if (filepath[strlen(filepath)-1] != '/') strcat(filepath, "/");
+            strcat(filepath, de->d_name);
+            if (stat(filepath, &sb) == -1) {
+                if (lstat(filepath, &sb) == -1) {
+                    perror(filepath);
+                } else {
+                    // link has no target
+                thisfiletime = sb.st_mtime;
+                fprintf(fpo, "%s %s" ,filepath,
+                            asctime(localtime(&thisfiletime)) );
+                } // if (lstat
+            } // if(stat..
+            break;
+            default:
+            // ignore everything else
+            continue;
+            break;
+        } // switch()
+    }
+    closedir(dp);
+} // listdanglers()
+
+void recursedir(char *path)
+{
+    /*
+     * Output a list of old files if such exist
+    */
+    char newpath[PATH_MAX];
+    struct dirent *de;
+    DIR *dp;
+
+    dp = opendir(path);
+    if (!(dp)) {
+        perror(path);
+        exit(EXIT_FAILURE);
+    }
+    while ((de = readdir(dp))) {
+        time_t thisfiletime;
+        struct stat sb;
+        char filepath[PATH_MAX];
+        char newfilepath[PATH_MAX];
+        if (strcmp(de->d_name, ".") == 0) continue;
+        if (strcmp(de->d_name, "..") == 0) continue;
+
+        switch (de->d_type) {
+            case DT_DIR:
+            // process this dir
+            strcpy(newpath, path);
+            if (newpath[strlen(newpath)-1] != '/') strcat(newpath, "/");
+            strcat(newpath, de->d_name);
+            recursedir(newpath);
+            break;
+            case DT_REG:
+            case DT_LNK:
+            // common processing for files and symlinks
+            strcpy(filepath, path);
+            if (filepath[strlen(filepath)-1] != '/')
+                strcat(filepath, "/");
+            strcat(filepath, de->d_name);
+            break;
+            default:
+            continue;   // ignore all other d_types
+            break;
+        } // switch()
+        // processing regular files and symlinks diverges here
+        switch(de->d_type) {
+            case DT_REG:
+            if (stat(filepath, &sb) == -1) {
+                perror(filepath);   // just note the error, don't abort.
+            } else {
+                // do the file file m time check
+                thisfiletime = sb.st_mtime;
+                if (thisfiletime < fileage) {
+                    // report the thing
+                    fprintf(fpo, "%s %s" ,filepath,
+                                asctime(localtime(&thisfiletime)) );
+                }
+            }
+            break;
+            case DT_LNK:
+            if (stat(filepath, &sb) == -1) {
+                char namebuf[PATH_MAX];
+                ssize_t ret;
+                struct stat sb;
+                switch (errno) {
+                    case ELOOP:
+                    /* Well I can't know how many links are in
+                     * the chain but there must be at least 2
+                     * so I'll send both of those names to stderr */
+                     ret = readlink(filepath, namebuf, PATH_MAX-1);
+                     if (ret == -1) {
+                         perror(filepath);
+                     } else {
+                         fprintf(stderr, "%s\n", filepath);
+                     }
+                    break;
+                    case ENOENT:
+                    /* No target somewhere in the chain but I
+                     * can follow the chain and send all of it to
+                     * stderr */
+                    /* NB stat() is bugged in that it sets errno to
+                     *  ENOENT instead of ELOOP when a circular symlink
+                     * is encountered. Consequently I have implemented
+                     * my own test for circularity. */
+                    // first up, output this name and time to stderr.
+                    if ((lstat(filepath, &sb)) == -1) {
+                        perror(filepath);
+                    } else {
+                        int loopcounter = 0;
+                        thisfiletime = sb.st_mtime;
+                        fprintf(stderr, "%s %s" ,filepath,
+                                asctime(localtime(&thisfiletime)) );
+                        strcpy(newfilepath, filepath);
+                        while ((ret = readlink(newfilepath,
+                                namebuf, PATH_MAX-1)) != -1) {
+                            loopcounter++;
+                            if (loopcounter > eloop) break;
+                            namebuf[ret] = '\0';
+                            if (lstat(namebuf, &sb) == -1) {
+                                perror(namebuf);
+                            } else {
+                                thisfiletime = sb.st_mtime;
+                                fprintf(stderr, "%s %s" ,namebuf,
+                                    asctime(localtime(&thisfiletime)) );
+                            }
+                            strcpy(newfilepath, namebuf);
+                        } // while()
+                    } // if/else(lstat..
+                    break;
+                    default:
+                    perror(filepath);   // just report it
+                    break;
+                }
+            } else {
+                // stat() succeeded so the link target exists
+                thisfiletime = sb.st_mtime;
+                if (thisfiletime < fileage) {
+                    // report the thing
+                    fprintf(fpo, "%s %s" ,filepath,
+                                asctime(localtime(&thisfiletime)) );
+                }
+            }
+            break;
+        } // switch()
+    }
+    closedir(dp);
+} // recursedir()
+
+void delete_danglers(char *fn)
+{
+    /* */
+    char buf[PATH_MAX];
+    char dir[PATH_MAX];
+    char *dow[] = {" Sun ", " Mon ", " Tue ", " Wed ", " Thu ",
+                    " Fri ", " Sat "};
+    char *cp;
+    int badformat, i;
+    FILE *fpi;
+    if (!(fpi = fopen(fn, "r"))) {
+        perror(fn);
+        exit (EXIT_FAILURE);
+    }
+
+    // set up directory under consideration
+    dir[0] = 0;
+
+    while (fgets(buf, PATH_MAX, fpi)) {
+        // find the end of the filename
+        badformat = 1;
+        for (i=0; i < 7; i++) {
+            cp = strstr(buf, dow[i]);
+            if (cp) {
+                badformat = 0;
+                break;
+            }
+        } // for(i=...
+        if (badformat) {
+            fprintf(stderr, "Mal formed data line: %s\n", buf);
+            exit(EXIT_FAILURE);
+        }
+        *cp = 0;
+        // directory processing
+        cp = strrchr(buf, '/');
+        *cp = 0;
+        if (strcmp(dir, buf) != 0) { // have a new dir
+            if (strlen(dir)) rmdir(dir);
+            // Will fail if not empty so fail silently
+            strcpy(dir, buf);   // init new dir
+        }
+        *cp = '/';  // restore full path name to file
+
+        // now have absolute pathname to file, delete it.
+        if (unlink(buf) == -1) {
+            // just report the erroneous name, don't abort.
+            perror(buf);
+        }
+    } // while()
+}// delete_danglers()
 
 
 
