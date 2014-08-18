@@ -1,64 +1,46 @@
-.\" Title: Program name, manual section, and date
-.TH PROG 1
-.\" Section heading: NAME, followed by command name and one line summary
-.\" It's important to copy this exactly; the "whatis" database (used
-.\" for apropos) looks for the summary line.
+.TH OLDFILES 1 "v\ 1.1.0" "2014-0-18" "GNU"
 .SH NAME
-prog \- create output from input
-.\" Section heading: SYNOPSIS, followed by syntax summary
-.SH SYNOPSIS
-.B prog
-\" .B: bold font; use it for the command name.
-[ -b ] [ -c ] [ -d ] \" Put optional arguments in square brackets.
-[ input [ output ]]
-\" Arguments can be spread across several lines.
+.B oldfiles
+\- Generate a list of oldfiles in optional user input dir.
 .br
-\" End the synopsis with an explicit line break (.br)
-.\" A new section: DESCRIPTION, followed by what the command does
-.SH DESCRIPTION
-.I Prog
-\" .I: Italic font for the word "Prog"
-performs lots of computations. Input to
-.IR prog ,
-\" .IR: One word italic, next word roman, no space between.
-is taken from the file
-.IR input ,
-and output is sent to the file
-.IR output ,
-which default to standard input and standard output if not specified.
-.\" Another section: now we're going to discuss the -b, -c, and -d options
+Oldfiles are listed on stdout and broken symlinks on stderr.
+.SH SYNOPSIS
+.B duplicates \fR[option] \fI[dir]\fR > \fIoldfiles\fR
+.br
+.B duplicates \fR[option] \fI[dir]\fR > \fIoldfiles\fR 2> \fIbroken\fR
 .SH OPTIONS
-.\" The .TP macro precedes each option
 .TP
-.B \-b \" print the -b option in bold.
-Print output in binary.
+\-h, prints a brief help message.
 .TP
-.B \-c \" \- requests a minus sign, which is preferable to a hyphen (-)
-Eliminate ASCII characters from input before processing.
-.TP
-.B \-d
-Cause daemons to overrun your computer.
-.\" OK, we're done with the description and the options; now mention
-.\" other requirements (like environment and files needed) as well as
-.\" what can go wrong. You can add any other sections you want.
-.SH FILES
-.PD 0
-.TP 20
-.B /dev/null
-data file
-.TP
-.B /tmp/prog*
-temporary file (typically 314.159 Gigabytes)
-.PD
-.SH BUGS
-In order to optimize computational speed, this program always produces
-the same result, independent of the input.
-.\" Use .LP between paragraphs
-.LP
-If the moon is full,
-.I prog
-may destroy your input file. To say nothing of your sex life.
-.\" Good manual pages end by stating who wrote the program.
-.SH AUTHOR
-I wouldn't admit to this hack if my life depended on it.
+\-a N[MmDdYy], choose file age. By default this is 3 years older than
+.br
+the time of program execution. The qualifier [MmDdYy] represents
+.br
+months, days or years. If not specified the default is years.
 
+.TP
+\-o yyyymmdd[hh[mm]], list files older than this date.
+.SH DESCRIPTION
+\fBoldfiles\fR recursively searches the user input dir, or in default
+.br
+the users home dir, and generates a list of files older than the
+.br
+optional input age or input cutoff date. By default the cutoff date
+.br
+is 3 years older than the time the program is run.
+.br
+Broken symlinks are sent to \fIstderr\fR when encountered.
+.br
+Symlinked files, if old, will cause both the symlink and the linked
+.br
+file to be listed. This applies even if the linked file is outside
+.br
+the search path. On the other hand, an old file which is linked by
+.br
+a symlink outside the search path will leave that link dangling when
+.br
+it's target is deleted.
+.SH VERSION
+This documentation describes \fBolsfiles\fR version 1.1.0
+.SH "SEE ALSO"
+bigfiles(1), brokensym(1), duplicates(1), filetimes(1, )processdups(1), zapfiles(1), cleanuputils(7)
