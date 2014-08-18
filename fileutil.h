@@ -13,5 +13,6 @@ struct fdata {
 };
 struct fdata readfile(const char *filename, off_t extra, int fatal);
 FILE *dofopen(const char *path, const char *mode);
+void dumpfile(const char *dumpthis, FILE *dumpto);
 
 #endif /* fileutil.h */

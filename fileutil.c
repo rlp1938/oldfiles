@@ -79,3 +79,11 @@ FILE *dofopen(const char *path, const char *mode)
 	}
 	return fp;
 } // dofopen()
+
+void dumpfile(const char *dumpthis, FILE *dumpto)
+{
+	struct fdata fdat;
+	fdat = readfile(dumpthis, 0, 1);
+	fwrite(fdat.from, 1, fdat.to - fdat.from, dumpto);
+	free (fdat.from);
+} // dumpfile()

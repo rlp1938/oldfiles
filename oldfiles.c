@@ -1,4 +1,3 @@
-
 /*      oldfiles.c
  *
  *  Copyright 2011 Bob Parker <rlp1938@gmail.com>
@@ -46,8 +45,6 @@ static char *helpmsg =
   "\tOldfiles when run with no options or target directory specified,\n\t"
   "simply lists all files in the users home directory which are\n\t"
   "older than the default age of 3 years.\n\t"
-  "You may optionally use it to delete such listed files and after\n\t"
-  "that delete any consequential empty directories.\n"
   "\nOPTIONS\n"
   "\t-h outputs this help message.\n"
   "\t-aN[MmDd] Choose file age, by default this is 3 years older"
@@ -55,22 +52,10 @@ static char *helpmsg =
   "\t If N is followed by a suffix [MmDd] the age will be\n"
   "\t interpreted as months or days respectively, otherwise years.\n"
   "\t-o yyyymmdd[hh[mm]] Delete files older than this date.\n"
-  "\t-f filename. Output will be sent to this filename, default stdout\n"
-  "\t   This option is ignored unless in listing mode.\n"
-  "\t-u filename. Update filetimes in files listed in filename to now.\n"
-  "\t   The list of files must be in the same format as the list of\n"
-  "\t   old files produced by this program.\n"
-  "\t-d filename. Delete files listed in filename.\n"
-  "\t   The list of files must be in the same format as the list of\n"
-  "\t   old files produced by this program.\n"
-  "\t-D Delete empty dirs under topdir.\n"
-  "\t-s list dangling symlinks under topdir.\n"
-  "\t-b filename. Delete the dangling symlinks listed in filename.\n"
 ;
 //Global vars
 static FILE *fpo;
 static time_t fileage;
-static int verbose;
 static char *opfn;
 static const int eloop = 5;
 static int oldcount;
@@ -87,55 +72,43 @@ struct listitem {
 static struct listitem *head;
 
 struct listitem *newlistitem(void);
+static void recursedir(char *topdir);
 static char *dostrdup(const char *s);
 static void dohelp(int forced);
-static void recursedir(char *path);
-static void protect(const char *fn);
-static void delete(const char *fn);
-static void listdirs(char *dirname);
 int numdiritems(char *testdir);
 struct listitem *insertbefore(char *name, struct listitem *head);
-static void delete_listed(struct listitem *head);
-static void delete_empties(char *topdir);
-static void print_listed(struct listitem *head);
-static void recurseprint(char *topdir);
 time_t cutofftimebyage(int age, char aunit);
 time_t parsetimestring(const char *dts);
 int validday(int yy, int mon, int dd);
 int leapyear(int yy);
-static void listdanglers(char *topdir);
 static void dorealpath(char *givenpath, char *resolvedpath);
 static void  dosystem(const char *cmd);
 static char** workfiles(const char *dir, const char *progname,
 						int numfiles);
 static void* domalloc(size_t thesize);
 static void stripinode(const char *fnamein, const char *fnameout);
-static void dumpfile(const char *dumpthis, FILE *dumpto);
 
 int main(int argc, char **argv)
 {
     int opt;
-    int age, task, action;
+    int age;
     char topdir[PATH_MAX];
     char aunit = 'Y';
     struct stat sb;
-    char *datestr, *actionfn;
+    char *datestr;
 	char command[PATH_MAX];
 	char **workfile;
 
     // set up defaults
     age = 3;
     strcpy(topdir, getenv("HOME"));
-    verbose = 0;
     head = newlistitem();
     opfn = (char *)NULL;
-    action = 0;
-    task = 1;
     oldcount = 0;
     workfile = workfiles("/tmp/", argv[0], 4);
     fpo=dofopen(workfile[0], "w");
 
-    while((opt = getopt(argc, argv, ":hDa:f:u:d:o:sb:")) != -1) {
+    while((opt = getopt(argc, argv, ":ha:o:")) != -1) {
         switch(opt){
         /* I have no idea what the value of topdir will be during
          * options processing so all I can do is set a task variable
@@ -146,44 +119,15 @@ int main(int argc, char **argv)
             dohelp(0);
         break;
         case 'a': // change default age
-            age = atoi(optarg);
+            age = strtol(optarg, NULL, 10);
             if (strchr(optarg, 'M')) aunit = 'M';
             if (strchr(optarg, 'm')) aunit = 'M';
             if (strchr(optarg, 'D')) aunit = 'D';
             if (strchr(optarg, 'd')) aunit = 'D';
         break;
-        case 'f':   // named output file, not stdout.
-            opfn = strdup(optarg);
-        break;
-        case 'u':   // update mtime to now for named files in list.
-                    // ie protect from being listed by this program.
-                task = 3;
-                actionfn = strdup(optarg);
-                action++;
-        break;
-        case 'd':   // unlink named files in list.
-                task = 4;
-                actionfn = strdup(optarg);
-                action++;
-        break;
-        case 'D':   // delete empty dirs under topdir
-                task = 5;
-                action++;
-        break;
         case 'o':   // list files older than input file time
-            task = 2;
             datestr = strdup(optarg);
-        break;
-        case 'e':   // list empty dir under topdir
-            task = 6;   // list before named file time
-        break;
-        case 's':   // list dangling symlinks under topdir.
-            task = 7;
-        break;
-        case 'b':   // delete dangling symlinks listed in named file.
-            task = 8;
-            actionfn = strdup(optarg);
-            action++;
+            fileage = parsetimestring(datestr);
         break;
         case ':':
             fprintf(stderr, "Option %c requires an argument\n",optopt);
@@ -196,12 +140,6 @@ int main(int argc, char **argv)
         } //switch()
     }//while()
 
-    // Check that mutually exclusive options have not been chosen.
-    if (action > 1) {
-        fprintf(stderr,
-        "You may only select one option of -u, -D -d -b in one run!\n");
-        dohelp(1);
-    }
     // now process the non-option arguments
 
     // 1.See if argv[1] exists.
@@ -223,51 +161,24 @@ int main(int argc, char **argv)
 	// Convert relative path to absolute if needed.
 	if (topdir[0] != '/') dorealpath(argv[optind], topdir);
 
-    // Chosse the action to be taken
-    switch (task) {
-        case 1: // list old files by elapsed time.
-            fileage = cutofftimebyage(age, aunit);
-            recursedir(topdir);
-            fclose(fpo);
-            if (oldcount > 0) {
-				sprintf(command, "sort -u %s > %s", workfile[0],
-						workfile[1]);
-				dosystem(command);
-			} else {
-				fprintf(stdout, "No old files found\n");
-				unlink(workfile[0]);
-			}
-			// get rid of the leading inode and sort on pathname
-			stripinode(workfile[1], workfile[2]);
-			sprintf(command, "sort %s > %s", workfile[2],
-						workfile[3]);
-			dosystem(command);
-			dumpfile(workfile[3], stdout);
-        break;
-        case 2: // list old files by user input cut-off date
-            fileage = parsetimestring(datestr);
-            if (opfn) fpo = dofopen(opfn, "w");
-            recursedir(topdir);
-        break;
-        case 3: // update files listed in user named file to now()
-            protect(actionfn);
-        break;
-        case 4: // delete files listed in user named file.
-            delete(actionfn);
-        break;
-        case 5: // delete empty dirs under topdir.
-            delete_empties(topdir);
-        break;
-        case 6: // list empty dirs under topdir in processing order.
-        break;
-        case 7: // list dangling symlinks under topdir.
-            listdanglers(topdir);
-        break;
-        case 8: // delete dangling symlinks listed in actionfn.
-        break;
-        default:
-        break;
-    } // switch(task)
+    fileage = cutofftimebyage(age, aunit);
+    recursedir(topdir);
+    fclose(fpo);
+    if (oldcount > 0) {
+		sprintf(command, "sort -u %s > %s", workfile[0],
+					workfile[1]);
+		dosystem(command);
+	} else {
+		fprintf(stdout, "No old files found\n");
+		unlink(workfile[0]);
+	}
+	// get rid of the leading inode and sort on pathname
+	stripinode(workfile[1], workfile[2]);
+	sprintf(command, "sort %s > %s", workfile[2],
+					workfile[3]);
+	dosystem(command);
+	dumpfile(workfile[3], stdout);
+
     return 0;
 }//main()
 
@@ -287,129 +198,6 @@ struct listitem *newlistitem(void)
     }
     return lip;
 } // newlistitem()
-
-
-void protect(const char *fn)
-{
-    // fn is a file containing a list of filenames to update mtime
-    // the lines in fn MUST be in the format as written out by this
-    // program.
-    FILE *fpi;
-    char buf[PATH_MAX];
-    char *dow[] = {" Sun", " Mon", " Tue", " Wed", " Thu", " Fri",
-                    " Sat"};
-    char *cp;
-    int badformat, i;
-
-    if (!(fpi = fopen(fn, "r"))) {
-        perror(fn);
-        exit (EXIT_FAILURE);
-    }
-
-    while (fgets(buf, PATH_MAX, fpi)) {
-        // find the end of the filename
-        badformat = 1;
-        for (i=0; i < 7; i++) {
-            cp = strstr(buf, dow[i]);
-            if (cp) {
-                badformat = 0;
-                break;
-            }
-        } // for(i=...
-        if (badformat) {
-            fprintf(stderr, "Mal formed data line: %s\n", buf);
-            exit(EXIT_FAILURE);
-        }
-        *cp = 0;
-        // now have absolute pathname to file, update times
-        if (utime(buf, NULL) == -1) {
-            // just report the erroneous name, don't abort.
-            perror(buf);
-        }
-    } // while()
-} //protect()
-
-void delete(const char *fn)
-{
-    // fn is a file containing a list of filenames to delete.
-    // the lines in fn MUST be in the format as written out by this
-    // program.
-    FILE *fpi;
-    char buf[PATH_MAX];
-    char dir[PATH_MAX];
-    char *dow[] = {" Sun ", " Mon ", " Tue ", " Wed ", " Thu ",
-                    " Fri ", " Sat "};
-    char *cp;
-    int badformat, i;
-
-    if (!(fpi = fopen(fn, "r"))) {
-        perror(fn);
-        exit (EXIT_FAILURE);
-    }
-
-    // set up directory under consideration
-    dir[0] = 0;
-
-    while (fgets(buf, PATH_MAX, fpi)) {
-        // find the end of the filename
-        badformat = 1;
-        for (i=0; i < 7; i++) {
-            cp = strstr(buf, dow[i]);
-            if (cp) {
-                badformat = 0;
-                break;
-            }
-        } // for(i=...
-        if (badformat) {
-            fprintf(stderr, "Mal formed data line: %s\n", buf);
-            exit(EXIT_FAILURE);
-        }
-        *cp = 0;
-        // directory processing
-        cp = strrchr(buf, '/');
-        *cp = 0;
-        if (strcmp(dir, buf) != 0) { // have a new dir
-            if (strlen(dir)) rmdir(dir);
-            // Will fail if not empty so fail silently
-            strcpy(dir, buf);   // init new dir
-        }
-        *cp = '/';  // restore full path name to file
-
-        // now have absolute pathname to file, delete it.
-        if (unlink(buf) == -1) {
-            // just report the erroneous name, don't abort.
-            perror(buf);
-        }
-
-    } // while()
-
-} // delete
-
-void listdirs(char *topdir)
-{
-    // traverse dir starting from topdir and list them
-    // in reverse order of depth.
-    char newdir[PATH_MAX];
-    struct dirent *de;
-    DIR *dp;
-    if (!(dp = opendir(topdir))) {
-        perror(topdir);
-        exit(EXIT_FAILURE);
-    }
-    head = insertbefore(topdir, head);
-    //printf("listdirs: %s\n", topdir);
-    while ((de = readdir(dp))) {
-        if ((strcmp(".",de->d_name) == 0) ||
-        (strcmp("..",de->d_name) == 0)) continue;
-        if (de->d_type == DT_DIR) {
-            strcpy(newdir, topdir);
-            if (newdir[strlen(newdir) - 1] != '/') strcat(newdir, "/");
-            strcat(newdir, de->d_name);
-            listdirs(newdir);
-        }
-    } // while()
-    closedir(dp);
-} // listdirs()
 
 int numdiritems(char *testdir)
 {   // counts number of dir items other than directories
@@ -433,57 +221,6 @@ struct listitem *insertbefore(char *name, struct listitem *head)
     li->next = head;
     return li;
 } // insertbefore()
-
-void delete_empties(char *topdir)
-{
-    //recurseprint(topdir);
-    listdirs(topdir);
-    print_listed(head);
-    delete_listed(head);
-} // delete_empties()
-
-void delete_listed(struct listitem *head)
-{   // requires that the empty dirs are in order from lowest to highest
-    while (head->dirname) {
-        sync(); // required most likely
-        if (rmdir(head->dirname) == -1) {
-            perror(head->dirname);   // don't abort just inform
-        } // if()
-        head = head->next;
-    } // while()
-} // delete_listed()
-
-void print_listed(struct listitem *head)
-{   // requires that the empty dirs are in order from lowest to highest
-    while (head->dirname) {
-        printf("%s\n", head->dirname);
-        head = head->next;
-    } // while()
-} // delete_listed()
-
-void recurseprint(char *topdir)
-{
-    // just for testing recursive traversal
-    DIR *dp;
-    struct dirent *de;
-    char newdir[PATH_MAX];
-    if (!(dp = opendir(topdir))) {
-        perror(topdir);
-        exit(EXIT_FAILURE);
-    }
-    printf("Dir is:%s\n", topdir);
-    while((de = readdir(dp))) {
-        if (strcmp(".", de->d_name) == 0 ) continue;
-        if (strcmp("..", de->d_name) == 0 ) continue;
-        if (de->d_type == DT_DIR) {
-            strcpy(newdir, topdir);
-            if (newdir[strlen(newdir)-1] != '/') strcat(newdir, "/");
-            strcat(newdir, de->d_name);
-            recurseprint(newdir);
-        }
-    } // while()
-    closedir(dp);
-}
 
 time_t cutofftimebyage(int age, char aunit)
 {
@@ -606,41 +343,6 @@ int leapyear(int yy)
     if (yy % 100 == 0) return 0;
     return 1; // yy % 4 == 0
 } // leapyear()
-
-void listdanglers(char *topdir)
-{
-    /*
-     * Search from topdir recursively to find dangling symlinks
-    * */
-    char newpath[PATH_MAX];
-    struct dirent *de;
-    DIR *dp;
-
-    dp = opendir(topdir);
-    if (!(dp)) {
-        perror(topdir);
-        exit(EXIT_FAILURE);
-    }
-    while ((de = readdir(dp))) {
-        time_t thisfiletime;
-        if (strcmp(de->d_name, ".") == 0) continue;
-        if (strcmp(de->d_name, "..") == 0) continue;
-        switch (de->d_type) {
-            case DT_DIR:
-            // process this dir
-            strcpy(newpath, topdir);
-            if (newpath[strlen(newpath)-1] != '/') strcat(newpath, "/");
-            strcat(newpath, de->d_name);
-            listdanglers(newpath);
-            break;
-            default:
-            // ignore everything else
-            continue;
-            break;
-        } // switch()
-    }
-    closedir(dp);
-} // listdanglers()
 
 void recursedir(char *path)
 {
@@ -819,13 +521,4 @@ void stripinode(const char *fnamein, const char *fnameout)
 	fclose(fpo);
 	free (fdat.from);
 } // stripinode()
-
-void dumpfile(const char *dumpthis, FILE *dumpto)
-{
-	struct fdata fdat;
-	fdat = readfile(dumpthis, 0, 1);
-	fwrite(fdat.from, 1, fdat.to - fdat.from, dumpto);
-	free (fdat.from);
-} // dumpfile()
-
 
