@@ -31,8 +31,9 @@
 #include <getopt.h>
 #include <time.h>
 #include <utime.h>
-
-char *helpmsg =
+#include <libgen.h>
+#include "fileutil.h"
+static char *helpmsg =
   "NAME\n\toldfiles - lists old files and optionally deletes them"
   " or renews file\n\ttimes using the generated list."
   "\tAlso provides an option to delete empty\n\tdirectories.\n"
@@ -67,11 +68,15 @@ char *helpmsg =
   "\t-b filename. Delete the dangling symlinks listed in filename.\n"
 ;
 //Global vars
-FILE *fpo;
-time_t fileage;
-int verbose;
-char *opfn;
-const int eloop = 5;
+static FILE *fpo;
+static time_t fileage;
+static int verbose;
+static char *opfn;
+static const int eloop = 5;
+static int oldcount;
+static const char *pathend = "!*END*!";	// Anyone who puts shit like
+										// that in a filename deserves
+										// what happens.
 
 
 struct listitem {
@@ -79,28 +84,33 @@ struct listitem {
     struct listitem *next;
 };
 
-struct listitem *head;
+static struct listitem *head;
 
 struct listitem *newlistitem(void);
-void dohelp(int forced);
-void recursedir(char *path);
-void protect(const char *fn);
-void delete(const char *fn);
-void listdirs(char *dirname);
+static char *dostrdup(const char *s);
+static void dohelp(int forced);
+static void recursedir(char *path);
+static void protect(const char *fn);
+static void delete(const char *fn);
+static void listdirs(char *dirname);
 int numdiritems(char *testdir);
 struct listitem *insertbefore(char *name, struct listitem *head);
-void delete_listed(struct listitem *head);
-void delete_empties(char *topdir);
-void print_listed(struct listitem *head);
-void recurseprint(char *topdir);
+static void delete_listed(struct listitem *head);
+static void delete_empties(char *topdir);
+static void print_listed(struct listitem *head);
+static void recurseprint(char *topdir);
 time_t cutofftimebyage(int age, char aunit);
 time_t parsetimestring(const char *dts);
 int validday(int yy, int mon, int dd);
 int leapyear(int yy);
-FILE *dofopen(const char *fn, const char *themode);
-void listdanglers(char *topdir);
-void delete_danglers(char *actionfn);
-
+static void listdanglers(char *topdir);
+static void dorealpath(char *givenpath, char *resolvedpath);
+static void  dosystem(const char *cmd);
+static char** workfiles(const char *dir, const char *progname,
+						int numfiles);
+static void* domalloc(size_t thesize);
+static void stripinode(const char *fnamein, const char *fnameout);
+static void dumpfile(const char *dumpthis, FILE *dumpto);
 
 int main(int argc, char **argv)
 {
@@ -110,16 +120,20 @@ int main(int argc, char **argv)
     char aunit = 'Y';
     struct stat sb;
     char *datestr, *actionfn;
+	char command[PATH_MAX];
+	char **workfile;
 
     // set up defaults
     age = 3;
     strcpy(topdir, getenv("HOME"));
-    fpo=stdout;
     verbose = 0;
     head = newlistitem();
     opfn = (char *)NULL;
     action = 0;
     task = 1;
+    oldcount = 0;
+    workfile = workfiles("/tmp/", argv[0], 4);
+    fpo=dofopen(workfile[0], "w");
 
     while((opt = getopt(argc, argv, ":hDa:f:u:d:o:sb:")) != -1) {
         switch(opt){
@@ -206,13 +220,29 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+	// Convert relative path to absolute if needed.
+	if (topdir[0] != '/') dorealpath(argv[optind], topdir);
+
     // Chosse the action to be taken
     switch (task) {
-        //struct tm *tim;
         case 1: // list old files by elapsed time.
             fileage = cutofftimebyage(age, aunit);
-            if (opfn) fpo = dofopen(opfn, "w");
             recursedir(topdir);
+            fclose(fpo);
+            if (oldcount > 0) {
+				sprintf(command, "sort -u %s > %s", workfile[0],
+						workfile[1]);
+				dosystem(command);
+			} else {
+				fprintf(stdout, "No old files found\n");
+				unlink(workfile[0]);
+			}
+			// get rid of the leading inode and sort on pathname
+			stripinode(workfile[1], workfile[2]);
+			sprintf(command, "sort %s > %s", workfile[2],
+						workfile[3]);
+			dosystem(command);
+			dumpfile(workfile[3], stdout);
         break;
         case 2: // list old files by user input cut-off date
             fileage = parsetimestring(datestr);
@@ -234,7 +264,6 @@ int main(int argc, char **argv)
             listdanglers(topdir);
         break;
         case 8: // delete dangling symlinks listed in actionfn.
-            delete_danglers(actionfn);
         break;
         default:
         break;
@@ -578,14 +607,6 @@ int leapyear(int yy)
     return 1; // yy % 4 == 0
 } // leapyear()
 
-FILE *dofopen(const char *fn, const char *themode)
-{
-    FILE *f = fopen(fn, themode);
-    if(f) return f;
-    perror(fn);
-    exit(EXIT_FAILURE);
-}
-
 void listdanglers(char *topdir)
 {
     /*
@@ -601,8 +622,6 @@ void listdanglers(char *topdir)
         exit(EXIT_FAILURE);
     }
     while ((de = readdir(dp))) {
-        struct stat sb;
-        char filepath[PATH_MAX];
         time_t thisfiletime;
         if (strcmp(de->d_name, ".") == 0) continue;
         if (strcmp(de->d_name, "..") == 0) continue;
@@ -613,22 +632,6 @@ void listdanglers(char *topdir)
             if (newpath[strlen(newpath)-1] != '/') strcat(newpath, "/");
             strcat(newpath, de->d_name);
             listdanglers(newpath);
-            break;
-            case DT_LNK:
-            // process symlink only
-            strcpy(filepath, topdir);
-            if (filepath[strlen(filepath)-1] != '/') strcat(filepath, "/");
-            strcat(filepath, de->d_name);
-            if (stat(filepath, &sb) == -1) {
-                if (lstat(filepath, &sb) == -1) {
-                    perror(filepath);
-                } else {
-                    // link has no target
-                thisfiletime = sb.st_mtime;
-                fprintf(fpo, "%s %s" ,filepath,
-                            asctime(localtime(&thisfiletime)) );
-                } // if (lstat
-            } // if(stat..
             break;
             default:
             // ignore everything else
@@ -644,7 +647,6 @@ void recursedir(char *path)
     /*
      * Output a list of old files if such exist
     */
-    char newpath[PATH_MAX];
     struct dirent *de;
     DIR *dp;
 
@@ -656,167 +658,174 @@ void recursedir(char *path)
     while ((de = readdir(dp))) {
         time_t thisfiletime;
         struct stat sb;
-        char filepath[PATH_MAX];
-        char newfilepath[PATH_MAX];
+        char newpath[PATH_MAX];
         if (strcmp(de->d_name, ".") == 0) continue;
         if (strcmp(de->d_name, "..") == 0) continue;
-
+        strcpy(newpath, path);
+        if (newpath[strlen(newpath)-1] != '/') strcat(newpath, "/");
         switch (de->d_type) {
             case DT_DIR:
             // process this dir
-            strcpy(newpath, path);
-            if (newpath[strlen(newpath)-1] != '/') strcat(newpath, "/");
             strcat(newpath, de->d_name);
             recursedir(newpath);
             break;
             case DT_REG:
-            case DT_LNK:
-            // common processing for files and symlinks
-            strcpy(filepath, path);
-            if (filepath[strlen(filepath)-1] != '/')
-                strcat(filepath, "/");
-            strcat(filepath, de->d_name);
+            strcat(newpath, de->d_name);
+            if (stat(newpath, &sb) == -1) {
+                perror(newpath);   // just note the error, don't abort.
+                break;
+            }
+            // do the file m time check
+            thisfiletime = sb.st_mtime;
+            if (thisfiletime < fileage) {
+				// report the thing
+                fprintf(fpo, "%.16lx %s%s %s" ,sb.st_ino, newpath,
+					pathend, asctime(localtime(&thisfiletime)));
+				oldcount++;
+            }
             break;
-            default:
+            case DT_LNK:
+            /* symlink processing.
+             I once did have separate processing for errors ELOOP
+             and ENOENT but circular links are simply reported as
+             ENOENT along with missing links. So I'll just let perror
+             take care of it all. */
+
+			/* stat() gives me times applicable to the target not the
+			 link, but unlink() will remove the link, not the target.
+			 That much is fine because, if old, I want to remove the
+			 link as well as the target. */
+
+            if (stat(newpath, &sb) == -1) {
+                perror(newpath);   // just note the error, don't abort.
+                break;
+			}
+            // do the file m time check
+            thisfiletime = sb.st_mtime;
+            if (thisfiletime < fileage) {
+				/* NB if link or links are within the given search dir,
+				 * the target will be reported more than once. Sort -u
+				 * will take care of such happenings.*/
+
+				char target[PATH_MAX];
+                // report the symlink
+                fprintf(fpo, "%.16lx %s%s %s" ,sb.st_ino, newpath, pathend,
+                            asctime(localtime(&thisfiletime)) );
+                 oldcount++;
+				// Dealt with the link, now report the target of the link
+				dorealpath(newpath, target);
+				fprintf(fpo, "%.16lx %s%s %s" ,sb.st_ino, target, pathend,
+                            asctime(localtime(&thisfiletime)) );
+                 oldcount++;
+            }
+            break;
+
+           default:
             continue;   // ignore all other d_types
             break;
-        } // switch()
-        // processing regular files and symlinks diverges here
-        switch(de->d_type) {
-            case DT_REG:
-            if (stat(filepath, &sb) == -1) {
-                perror(filepath);   // just note the error, don't abort.
-            } else {
-                // do the file file m time check
-                thisfiletime = sb.st_mtime;
-                if (thisfiletime < fileage) {
-                    // report the thing
-                    fprintf(fpo, "%s %s" ,filepath,
-                                asctime(localtime(&thisfiletime)) );
-                }
-            }
-            break;
-            case DT_LNK:
-            if (stat(filepath, &sb) == -1) {
-                char namebuf[PATH_MAX];
-                ssize_t ret;
-                struct stat sb;
-                switch (errno) {
-                    case ELOOP:
-                    /* Well I can't know how many links are in
-                     * the chain but there must be at least 2
-                     * so I'll send both of those names to stderr */
-                     ret = readlink(filepath, namebuf, PATH_MAX-1);
-                     if (ret == -1) {
-                         perror(filepath);
-                     } else {
-                         fprintf(stderr, "%s\n", filepath);
-                     }
-                    break;
-                    case ENOENT:
-                    /* No target somewhere in the chain but I
-                     * can follow the chain and send all of it to
-                     * stderr */
-                    /* NB stat() is bugged in that it sets errno to
-                     *  ENOENT instead of ELOOP when a circular symlink
-                     * is encountered. Consequently I have implemented
-                     * my own test for circularity. */
-                    // first up, output this name and time to stderr.
-                    if ((lstat(filepath, &sb)) == -1) {
-                        perror(filepath);
-                    } else {
-                        int loopcounter = 0;
-                        thisfiletime = sb.st_mtime;
-                        fprintf(stderr, "%s %s" ,filepath,
-                                asctime(localtime(&thisfiletime)) );
-                        strcpy(newfilepath, filepath);
-                        while ((ret = readlink(newfilepath,
-                                namebuf, PATH_MAX-1)) != -1) {
-                            loopcounter++;
-                            if (loopcounter > eloop) break;
-                            namebuf[ret] = '\0';
-                            if (lstat(namebuf, &sb) == -1) {
-                                perror(namebuf);
-                            } else {
-                                thisfiletime = sb.st_mtime;
-                                fprintf(stderr, "%s %s" ,namebuf,
-                                    asctime(localtime(&thisfiletime)) );
-                            }
-                            strcpy(newfilepath, namebuf);
-                        } // while()
-                    } // if/else(lstat..
-                    break;
-                    default:
-                    perror(filepath);   // just report it
-                    break;
-                }
-            } else {
-                // stat() succeeded so the link target exists
-                thisfiletime = sb.st_mtime;
-                if (thisfiletime < fileage) {
-                    // report the thing
-                    fprintf(fpo, "%s %s" ,filepath,
-                                asctime(localtime(&thisfiletime)) );
-                }
-            }
-            break;
-        } // switch()
-    }
+
+
+		}
+	}
     closedir(dp);
 } // recursedir()
 
-void delete_danglers(char *fn)
+void dorealpath(char *givenpath, char *resolvedpath)
+{	// realpath() witherror handling.
+	if(!(realpath(givenpath, resolvedpath))) {
+		perror("realpath()");
+		exit(EXIT_FAILURE);
+	}
+} // dorealpath()
+
+void dosystem(const char *cmd)
 {
-    /* */
-    char buf[PATH_MAX];
-    char dir[PATH_MAX];
-    char *dow[] = {" Sun ", " Mon ", " Tue ", " Wed ", " Thu ",
-                    " Fri ", " Sat "};
-    char *cp;
-    int badformat, i;
-    FILE *fpi;
-    if (!(fpi = fopen(fn, "r"))) {
-        perror(fn);
-        exit (EXIT_FAILURE);
+    const int status = system(cmd);
+
+    if (status == -1) {
+        fprintf(stderr, "system to execute: %s\n", cmd);
+        exit(EXIT_FAILURE);
     }
 
-    // set up directory under consideration
-    dir[0] = 0;
+    if (!WIFEXITED(status) || WEXITSTATUS(status)) {
+        fprintf(stderr, "%s failed with non-zero exit\n", cmd);
+        exit(EXIT_FAILURE);
+    }
 
-    while (fgets(buf, PATH_MAX, fpi)) {
-        // find the end of the filename
-        badformat = 1;
-        for (i=0; i < 7; i++) {
-            cp = strstr(buf, dow[i]);
-            if (cp) {
-                badformat = 0;
-                break;
-            }
-        } // for(i=...
-        if (badformat) {
-            fprintf(stderr, "Mal formed data line: %s\n", buf);
-            exit(EXIT_FAILURE);
-        }
-        *cp = 0;
-        // directory processing
-        cp = strrchr(buf, '/');
-        *cp = 0;
-        if (strcmp(dir, buf) != 0) { // have a new dir
-            if (strlen(dir)) rmdir(dir);
-            // Will fail if not empty so fail silently
-            strcpy(dir, buf);   // init new dir
-        }
-        *cp = '/';  // restore full path name to file
+    return;
+} // dosystem()
 
-        // now have absolute pathname to file, delete it.
-        if (unlink(buf) == -1) {
-            // just report the erroneous name, don't abort.
-            perror(buf);
-        }
-    } // while()
-}// delete_danglers()
+char *dostrdup(const char *s)
+{
+	/*
+	 * strdup() with in built error handling
+	*/
+	char *cp = strdup(s);
+	if(!(cp)) {
+		perror(s);
+		exit(EXIT_FAILURE);
+	}
+	return cp;
+} // dostrdup()
 
+char** workfiles(const char *dir, const char *progname, int numfiles)
+{
+	// return a list of workfile[0].. workfile[numfiles-1] containing
+	// $USERprogname<0> .. $USERprogname<numfiles-1>.
+	// workfile[numfiles] will be (char*)NULL.
+	char **workfile;
+	char progfile[256];
+	char username[256];
+	char work[PATH_MAX];
+	int i;
 
+	strcpy(work, progname);
+	strcpy(progfile, basename(work));
+	strcpy(username, getenv("USER"));
+	workfile = domalloc(sizeof(char *) * (numfiles + 1));
 
+	for(i=0; i<numfiles; i++){
+		sprintf(work, "%s%s%s%d", dir, username, progfile, i);
+		workfile[i] = dostrdup(work);
+	} // for()
+	workfile[numfiles] = (char *)NULL;
+	return workfile;
+} // worfiles()
+
+static void* domalloc(size_t thesize)
+{	// malloc() with error handling
+	void *ptr = malloc(thesize);
+	if (!(ptr)) {
+		perror("malloc()");
+		exit(EXIT_FAILURE);
+	}
+	return ptr;
+}
+
+void stripinode(const char *fnamein, const char *fnameout)
+{
+	FILE *fpo;
+	struct fdata fdat;
+	char *bol, *eol;
+
+	fpo = dofopen(fnameout, "w");
+	fdat = readfile(fnamein, 0, 1);
+	bol = fdat.from +17;
+	while(bol < fdat.to) {
+		eol = memchr(bol, '\n', PATH_MAX);
+		fwrite(bol, 1, eol-bol+1, fpo);
+		bol = eol + 18;
+	} // while()
+	fclose(fpo);
+	free (fdat.from);
+} // stripinode()
+
+void dumpfile(const char *dumpthis, FILE *dumpto)
+{
+	struct fdata fdat;
+	fdat = readfile(dumpthis, 0, 1);
+	fwrite(fdat.from, 1, fdat.to - fdat.from, dumpto);
+	free (fdat.from);
+} // dumpfile()
 
 
