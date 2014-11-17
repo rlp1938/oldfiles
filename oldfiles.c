@@ -171,6 +171,7 @@ int main(int argc, char **argv)
 	} else {
 		fprintf(stdout, "No old files found\n");
 		unlink(workfile[0]);
+		exit(EXIT_SUCCESS);
 	}
 	// get rid of the leading inode and sort on pathname
 	stripinode(workfile[1], workfile[2]);
@@ -328,7 +329,7 @@ time_t parsetimestring(const char *timestr)
 
 int validday(int yy, int mon, int dd)
 {
-    int daysinmonth[13] = {0,31,28,31,30,31,30,31,31,30,31,30,21};
+    int daysinmonth[13] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
     if (mon == 2) {
         daysinmonth[2] += leapyear(yy);
     }
