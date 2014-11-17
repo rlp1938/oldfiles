@@ -169,7 +169,7 @@ int main(int argc, char **argv)
 					workfile[1]);
 		dosystem(command);
 	} else {
-		fprintf(stdout, "No old files found\n");
+		fprintf(stderr, "No old files found\n");
 		unlink(workfile[0]);
 		exit(EXIT_SUCCESS);
 	}
