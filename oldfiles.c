@@ -1,6 +1,6 @@
 /*      oldfiles.c
  *
- *  Copyright 2011 Bob Parker <rlp1938@gmail.com>
+ *  Copyright 2015 Bob Parker rlp1938@gmail.com
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -52,6 +52,8 @@ static char *helpmsg =
   "\t If N is followed by a suffix [MmDd] the age will be\n"
   "\t interpreted as months or days respectively, otherwise years.\n"
   "\t-o yyyymmdd[hh[mm]] Delete files older than this date.\n"
+  "\t-q Quiet mode. When selected stops the 'No old files found.'"
+  " message.\n"
 ;
 //Global vars
 static FILE *fpo;
@@ -90,8 +92,7 @@ static void stripinode(const char *fnamein, const char *fnameout);
 
 int main(int argc, char **argv)
 {
-    int opt;
-    int age;
+    int opt, age, quiet;
     char topdir[PATH_MAX];
     char aunit = 'Y';
     struct stat sb;
@@ -100,6 +101,7 @@ int main(int argc, char **argv)
 	char **workfile;
 
     // set up defaults
+    quiet = 0;
     age = 3;
     strcpy(topdir, getenv("HOME"));
     head = newlistitem();
@@ -108,7 +110,7 @@ int main(int argc, char **argv)
     workfile = workfiles("/tmp/", argv[0], 4);
     fpo=dofopen(workfile[0], "w");
 
-    while((opt = getopt(argc, argv, ":ha:o:")) != -1) {
+    while((opt = getopt(argc, argv, ":ha:o:q")) != -1) {
         switch(opt){
         /* I have no idea what the value of topdir will be during
          * options processing so all I can do is set a task variable
@@ -124,6 +126,9 @@ int main(int argc, char **argv)
             if (strchr(optarg, 'm')) aunit = 'M';
             if (strchr(optarg, 'D')) aunit = 'D';
             if (strchr(optarg, 'd')) aunit = 'D';
+        break;
+        case 'q':
+			quiet = 1;
         break;
         case 'o':   // list files older than input file time
             datestr = strdup(optarg);
@@ -169,7 +174,9 @@ int main(int argc, char **argv)
 					workfile[1]);
 		dosystem(command);
 	} else {
-		fprintf(stderr, "No old files found\n");
+		if (!quiet) {
+			fprintf(stderr, "No old files found\n");
+		}
 		unlink(workfile[0]);
 		exit(EXIT_SUCCESS);
 	}
