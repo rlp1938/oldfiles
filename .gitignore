@@ -6,9 +6,9 @@
 /config.status
 /configure.scan
 /.deps/
-/progname
-/progname.plist/
-/progname.t2t
+/oldfiles
+/oldfiles.plist/
+/oldfiles.t2t
 /Makefile
 /stamp-h1
 /test*
